@@ -9,7 +9,6 @@ class GPR(nn.Module):
     def __init__(self, kernel):
         super(GPR, self).__init__()
         self.kernel = kernel
-        # self.noisestd = nn.Parameter(torch.tensor(0.2))
         self.noisestd = self.noise_std = nn.Parameter(
             torch.exp(uniform_(torch.empty(1), -3., 0.)))
 
@@ -27,16 +26,7 @@ class GPR(nn.Module):
         self.Kxx_noise = Kxx_noise
         self.Kxx_noise_inv = Kxx_noise_inv
 
-        # self.L = torch.cholesky(Kxx_noise)
-        # a, _ = torch.solve(self.y.unsqueeze(0), self.L.unsqueeze(0))
-        # alpha, _ = torch.solve(a, self.L.unsqueeze(0))
-        # self.alpha = alpha.squeeze(0)
-        # # self.Kxx_inv = Kxx_noise.inverse()
-        # m = Kxx @ alpha
         m = Kxx @ Kxx_noise_inv @ y
-        # v, _ = torch.solve(Kxx.unsqueeze(0), self.L.unsqueeze(0))
-        # S = Kxx + jitter - v.transpose(
-        #     -2, -1) @ v  # Kxx.transpose(-2, -1) @ self.Kxx_inv @ Kxx
         S = Kxx - Kxx @ Kxx_noise_inv @ Kxx
         return m, S
 
@@ -44,12 +34,8 @@ class GPR(nn.Module):
         y = self.y
         m, S = self.predict(X, y)
         const = -0.5 * self.N * torch.log(2 * torch.tensor(math.pi))
-        # data_fit = -0.5 * y.t() @ self.alpha  # self.Kxx_inv @ y
         data_fit = -0.5 * y.t() @ self.Kxx_noise_inv @ y
-        # complexity = - torch.sum(torch.log(torch.diag(self.L)))
         complexity = -torch.trace(torch.cholesky(self.Kxx_noise))
-        # complexity = -torch.trace(S) # self.Kxx_noise) # torch.log(torch.det(self.Kxx_noise))
-        # complexity = -torch.trace(self.L)
         print(
             f"nll terms datafit : {data_fit.detach().numpy()},\n complexity : {complexity}"
         )
@@ -64,9 +50,8 @@ class GPR(nn.Module):
         Kxx = self.kernel(x, x)
         Kxx_inv = (Kxx + self.noisestd**2 * torch.eye(self.N)).inverse()
 
-        m = Kt.transpose(-2, -1) @  Kxx_inv @ y  # self.alpha
-        # v, _ = torch.solve(Kt.unsqueeze(0), self.L.unsqueeze(0))
-        S = Ktt - Kt.transpose(-2, -1) @ Kxx_inv @ Kt  # tv.transpose(-2, -2) @ v
+        m = Kt.transpose(-2, -1) @  Kxx_inv @ y
+        S = Ktt - Kt.transpose(-2, -1) @ Kxx_inv @ Kt
         S = S.squeeze(0)
         if full_cov is False:
             S = torch.diag(S)
