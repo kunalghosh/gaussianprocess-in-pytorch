@@ -22,23 +22,33 @@ class GPR(nn.Module):
         jitter = 1e-5 * torch.eye(self.N)
         Kxx = self.kernel(X, X) + jitter
         Kxx_noise = Kxx + self.noisestd**2 * torch.eye(self.N)
+        Kxx_noise_inv = Kxx_noise.inverse()
+        self.Kxx = Kxx
+        self.Kxx_noise = Kxx_noise
+        self.Kxx_noise_inv = Kxx_noise_inv
 
-        self.L = torch.cholesky(Kxx_noise)
-        a, _ = torch.solve(self.y.unsqueeze(0), self.L.unsqueeze(0))
-        alpha, _ = torch.solve(a, self.L.unsqueeze(0))
-        self.alpha = alpha.squeeze(0)
-        # self.Kxx_inv = Kxx_noise.inverse()
-        m = Kxx @ alpha
-        v, _ = torch.solve(Kxx.unsqueeze(0), self.L.unsqueeze(0))
-        S = Kxx + jitter - v.transpose(
-            -2, -1) @ v  # Kxx.transpose(-2, -1) @ self.Kxx_inv @ Kxx
+        # self.L = torch.cholesky(Kxx_noise)
+        # a, _ = torch.solve(self.y.unsqueeze(0), self.L.unsqueeze(0))
+        # alpha, _ = torch.solve(a, self.L.unsqueeze(0))
+        # self.alpha = alpha.squeeze(0)
+        # # self.Kxx_inv = Kxx_noise.inverse()
+        # m = Kxx @ alpha
+        m = Kxx @ Kxx_noise_inv @ y
+        # v, _ = torch.solve(Kxx.unsqueeze(0), self.L.unsqueeze(0))
+        # S = Kxx + jitter - v.transpose(
+        #     -2, -1) @ v  # Kxx.transpose(-2, -1) @ self.Kxx_inv @ Kxx
+        S = Kxx - Kxx @ Kxx_noise_inv @ Kxx
         return m, S
 
-    def nll(self):
+    def nll(self, X, y):
         y = self.y
+        m, S = self.predict(X, y)
         const = -0.5 * self.N * torch.log(2 * torch.tensor(math.pi))
-        data_fit = -0.5 * y.t() @ self.alpha  # self.Kxx_inv @ y
-        complexity = - torch.sum(torch.log(torch.diag(self.L)))
+        # data_fit = -0.5 * y.t() @ self.alpha  # self.Kxx_inv @ y
+        data_fit = -0.5 * y.t() @ self.Kxx_noise_inv @ y
+        # complexity = - torch.sum(torch.log(torch.diag(self.L)))
+        complexity = -torch.trace(torch.cholesky(self.Kxx_noise))
+        # complexity = -torch.trace(S) # self.Kxx_noise) # torch.log(torch.det(self.Kxx_noise))
         # complexity = -torch.trace(self.L)
         print(
             f"nll terms datafit : {data_fit.detach().numpy()},\n complexity : {complexity}"
@@ -48,12 +58,16 @@ class GPR(nn.Module):
     def predict(self, xtest, full_cov=True):
         x = self.x
         y = self.y
+
         Kt = self.kernel(x, xtest)
         Ktt = self.kernel(xtest, xtest)
         Kxx = self.kernel(x, x)
         Kxx_inv = (Kxx + self.noisestd**2 * torch.eye(self.N)).inverse()
-        m = Kt.transpose(-2, -1) @ Kxx_inv @ y
-        S = Ktt - Kt.transpose(-2, -1) @ Kxx_inv @ Kt
+
+        m = Kt.transpose(-2, -1) @  Kxx_inv @ y  # self.alpha
+        # v, _ = torch.solve(Kt.unsqueeze(0), self.L.unsqueeze(0))
+        S = Ktt - Kt.transpose(-2, -1) @ Kxx_inv @ Kt  # tv.transpose(-2, -2) @ v
+        S = S.squeeze(0)
         if full_cov is False:
             S = torch.diag(S)
         return m, S
