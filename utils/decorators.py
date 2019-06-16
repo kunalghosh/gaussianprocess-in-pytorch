@@ -1,7 +1,8 @@
+import functools
 import torch
 
 def castargs_pytorch_to_numpy(func):
-    print("Inside decorator")
+    @functools.wraps(func)
     def wrapper_func(*args, **kwargs):
         new_args = []
         for arg in args:
