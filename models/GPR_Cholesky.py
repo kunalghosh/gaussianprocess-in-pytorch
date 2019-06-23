@@ -1,10 +1,7 @@
-import pdb
 import torch
 import torch.nn as nn
 from torch.nn.init import uniform_
 import math
-import torch.distributions.constraints as constraints
-from torch.nn.functional import softplus
 
 
 class GPRCholesky(nn.Module):
@@ -22,7 +19,7 @@ class GPRCholesky(nn.Module):
         """
         self.x, self.y, self.N = X, y, X.shape[-2]
 
-        self.Kxx = self.kernel(X, X) + torch.eye(self.N) * 1e-5
+        self.Kxx = self.kernel(X, X)  # + torch.eye(self.N) * 1e-5
         jitter = torch.eye(self.N) * self.noisestd ** 2
         L = torch.cholesky(self.Kxx + jitter)
         a, _ = torch.solve(y.unsqueeze(0), L.unsqueeze(0))
@@ -35,7 +32,7 @@ class GPRCholesky(nn.Module):
         alpha, L = self.forward(X, y)
         const = -0.5 * self.N * torch.log(2 * torch.tensor(math.pi))
         data_fit = -0.5 * y.t() @ alpha
-        complexity = -torch.trace(L)
+        complexity = -torch.log(torch.diag(L)).sum()
         print(
             f"nll terms datafit : {data_fit.detach().numpy()},\n complexity : {complexity}"
         )
@@ -54,10 +51,11 @@ class GPRCholesky(nn.Module):
 
         m = Kt.transpose(-2, -1) @ alpha
         v, _ = torch.solve(Kt.unsqueeze(0), L.unsqueeze(0))
-        v = v.unsqueeze(0)
+        v = v.squeeze(0)
         S = Ktt - v.transpose(-2, -1) @ v
         S = S.squeeze()
-        print(m.shape, S.shape)
+        # adding noisestd to get the variance of P(y*|f*)
+        S = S + torch.eye(S.shape[0]) * self.noisestd ** 2
         if full_cov is False:
             S = torch.diag(S)
         return m, S
