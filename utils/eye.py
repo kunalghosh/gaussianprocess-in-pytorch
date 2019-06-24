@@ -20,5 +20,5 @@ def eye(*args, toTorch=True):
     multidim_eye = np.tile(
         eye, (*args[:-1], 1, 1))  # (4, 5, 1, 1) following docstring example
     if toTorch:
-        multidim_eye = torch.tensor(multidim_eye)
+        multidim_eye = torch.tensor(multidim_eye, dtype=torch.float32)
     return multidim_eye
