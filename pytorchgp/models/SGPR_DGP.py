@@ -1,12 +1,14 @@
-import pdb
 import math
 
 import torch
 import torch.nn as nn
+from sklearn.decomposition import PCA
+from torch.nn import functional as F
 from torch.nn.init import uniform_
 
-from models import SGPR
-from utils import eye
+from pytorchgp.models import SGPR
+from pytorchgp.utils import eye
+from pytorchgp.utils.params import Log1pe
 
 
 class SGPRDGP(SGPR):
@@ -19,41 +21,64 @@ class SGPRDGP(SGPR):
         """
         super(SGPRDGP, self).__init__(kernel, M, Z)
 
-        self.noisestd = nn.Parameter(
-            torch.exp(uniform_(torch.empty(1), 0., 1.)))
+        self.transform = Log1pe()
+        self._noisestd = nn.Parameter(
+            self.transform._inverse(uniform_(torch.empty(1), 2, 3)))
+
         # Variational mean and cholesky variance
         self.qm = nn.Parameter(torch.empty(D_out, M, 1).normal_())
-        self.qL = nn.Parameter(torch.empty(D_out, M, M).normal_()).tril()
+        self._qL = nn.Parameter(torch.empty(D_out, M, M).normal_().tril())
+
         if Z is None:
-            self.z = None
+            raise AttributeError(
+                "The inducing locations Z must be initialized.")
         else:
             self.z = nn.Parameter(Z)
+
+        if D_out < self.z.shape[-1]:
+            # then do PCA
+            Z = PCA(n_components=D_out).fit_transform(Z)
+            self.z = nn.Parameter(Z)
+        else:
+            # append empty dimensions to Z
+            # F.pad pads with zeros to the (left, right)
+            # so (0, 3) would mean pad right (i.e. last dimension)
+            # with 3 columns of zeros.
+            self.z = nn.Parameter(F.pad(self.z, (0, D_out - self.z.shape[-1])))
+
         self.M = M
         self.D_out = D_out
+
+    @property
+    def noisestd(self):
+        return self.transform(self._noisestd)
+
+    @property
+    def qL(self):
+        return self._qL
 
     def __str__(self):
         return "SGPR_DGP"
 
     def forward(self, x):
-        # if self.z is None:
-        #     # self.z = torch.clone(x[:self.M, :])
-        #     kmeans = KMeans(n_clusters=self.M, random_state=0).fit(x)
-        #     self.z = nn.Parameter(torch.Tensor(kmeans.cluster_centers_))
 
         N = x.shape[-2]
         self.N = N
-        M = self.M
 
         z = self.z
-        Kxx = self.kernel(x, x)  # + eye(*Kxx.shape) * 1e-3
+        Kxx = self.kernel(x, x)
+        Kxx += eye(*Kxx.shape[:-1]) * 1e-6
+
         Kxz = self.kernel(x, z)
-        Kzz = self.kernel(z, z)  # + eye(*Kzz.shape) * 1e-3
+
+        Kzz = self.kernel(z, z)
+        Kzz += eye(*Kzz.shape[:-1]) * 1e-6
 
         self.Kzz = Kzz
 
         A = Kxz @ Kzz.inverse()
         m = A @ self.qm
-        S_q = self.qL @ self.qL.transpose(-2, -1)
+        S_q = self.qL.tril() @ self.qL.tril().transpose(-2, -1)
         S = Kxx + A @ (S_q - Kzz) @ A.transpose(-2, -1)
         return m, S
 
@@ -62,15 +87,12 @@ class SGPRDGP(SGPR):
             y = y.reshape(self.D_out, -1, 1)
         # posterior mean and Variance
         m, S = self.forward(x)
-        # mvn = MultivariateNormal(m, torch.eye(N) * self.noisestd**2)
-        # logpdf = mvn.log_prob(y).sum()
         N = self.N
-        # k, _ = m.shape
-        logpdf = -0.5 * (
-            torch.sum(torch.log(self.noisestd**2)) +
-            (y - m).transpose(-2, -1) @ (torch.eye(N) * 1 / self.noisestd**2) @ (y - m) +
-            N * torch.log(2 * torch.tensor(math.pi))).squeeze()
-        trace_term = -0.5 * (1 / self.noisestd**2) * torch.einsum('kii', S)
+        logpdf = -0.5 * (N * torch.sum(torch.log(self.noisestd**2)) +
+                         (y - m).transpose(-2, -1)
+                         @ (torch.eye(N) * 1 / self.noisestd**2) @ (y - m) +
+                         N * torch.log(2 * torch.tensor(math.pi))).squeeze()
+        trace_term = -0.5 * torch.einsum('kii', S) / self.noisestd**2
         return logpdf + trace_term
 
     def elbo(self, x, y):
@@ -84,22 +106,27 @@ class SGPRDGP(SGPR):
 
     def kl(self):
         D_out = self.D_out
-        return self.kl_multivariate_normal(self.qm, self.qL @ self.qL.transpose(-2, -1),
+        return self.kl_multivariate_normal(self.qm, self.qL.tril(),
                                            torch.zeros(D_out, self.M, 1),
                                            eye(D_out, self.M))
 
-    def kl_multivariate_normal(self, m0, S0, m1, S1):
+    def kl_multivariate_normal(self, m0, L0, m1, S1):
         """
         KL between a gaussian N(m,S) and N(,I)
         KL(q||p)
         """
+        S0 = L0 @ L0.transpose(-2, -1)
         M = self.M
         print(f"k is {M}")
         trace_term = torch.einsum('kii', S1.inverse() @ S0)
-        mean_term = ( (m1 - m0).transpose(-2, -1) @ S1.inverse() @ (m1 - m0) ).squeeze()
+        mean_term = (
+            (m1 - m0).transpose(-2, -1) @ S1.inverse() @ (m1 - m0)).squeeze()
         print(S1.shape)
-        log_det_S1 = torch.stack([torch.logdet(_) for _ in S1 + 1e-5 * torch.eye(M) * torch.randn(M)**2])
-        log_det_S0 = torch.stack([torch.logdet(_) for _ in S0 + 1e-5 * torch.eye(M) * torch.randn(M)**2])
+        log_det_S1 = torch.sum(
+            torch.log(torch.stack([torch.diag(_)
+                                   for _ in S1])))  # S1 is Identity
+        log_det_S0 = torch.sum(
+            torch.log(torch.stack([torch.diag(_)**2 for _ in L0])))
         log_det_term = log_det_S1 - log_det_S0
         print(f"logdet S0 = {log_det_S0} S1 = {log_det_S1}")
         print(
@@ -108,8 +135,8 @@ class SGPRDGP(SGPR):
         return 0.5 * (trace_term + mean_term - M + log_det_term).squeeze()
 
     def predict(self, xtest, full_cov=True):
-        N = self.N
         m, S = self.forward(xtest)
+        S = S + eye(*S.shape[:-1]) * self.noisestd
         if not full_cov:
-            S = torch.diag(S)
+            S = torch.einsum('kii->i', S)
         return m, S
