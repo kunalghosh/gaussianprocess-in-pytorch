@@ -19,7 +19,7 @@ class SGPR(GPR):
         super(SGPR, self).__init__(kernel)
 
         self.transform = Log1pe()
-        self.tril = nn.Parameter(torch.ones((M,M)).tril())
+        self.tril = nn.Parameter(torch.ones((M, M)).tril())
         self._noisestd = nn.Parameter(
             self.transform._inverse(uniform_(torch.empty(1), 2, 3)))
 
@@ -39,7 +39,6 @@ class SGPR(GPR):
     @property
     def qL(self):
         return self._qL
-
 
     def __str__(self):
         return "SGPR"
@@ -75,12 +74,11 @@ class SGPR(GPR):
         k, _ = m.shape
         logpdf = -0.5 * (
             N * torch.sum(torch.log(self.noisestd**2)) +
-            (y - m).t() @ (torch.eye(N) * 1 /self.noisestd**2)
-            @ (y - m) + N * torch.log(2 * torch.tensor(math.pi))).squeeze()
+            (y - m).t() @ (torch.eye(N) * 1 / self.noisestd**2) @ (y - m) +
+            N * torch.log(2 * torch.tensor(math.pi))).squeeze()
         # trace_term = -0.5 * N * (
         ## Removing the N in the trace speeds up convergence !
-        trace_term = -0.5 * (
-            torch.trace(S) / self.noisestd**2)
+        trace_term = -0.5 * (torch.trace(S) / self.noisestd**2)
         return logpdf + trace_term
 
     def elbo(self, x, y):
@@ -136,9 +134,10 @@ class SGPR(GPR):
         trace_term = torch.trace(S1.inverse() @ S0)
         mean_term = (m1 - m0).t() @ S1.inverse() @ (m1 - m0)
 
-        log_det_S1 = 0 # torch.trace(S1)  # identity
+        log_det_S1 = 0  # torch.trace(S1)  # identity
         # log_det_S0 = 2 * torch.einsum('ii', L0)  # * torch.randn(M)**2)
-        log_det_S0 = torch.sum(torch.log(torch.diag(L0)**2))  # * torch.randn(M)**2)
+        log_det_S0 = torch.sum(torch.log(
+            torch.diag(L0)**2))  # * torch.randn(M)**2)
         log_det_term = log_det_S1 - log_det_S0
         print(f"logdet S0 = {log_det_S0} S1 = {log_det_S1}")
         # print(
