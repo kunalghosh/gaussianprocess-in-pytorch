@@ -15,6 +15,14 @@ class GPR(nn.Module):
     def __str__(self):
         return "GPR"
 
+    # @property
+    # def noisestd(self):
+    #     return torch.clamp(self.transform(self.noisestd), min=0.01, max=2.)
+
+    # @noisestd.setter
+    # def noisestd(self, value):
+    #     self.noisestd = torch.clamp(self.transform(value, min=0.01, max=2.))
+
     def forward(self, X, y):
         """
         Returns posterior mean and variance
