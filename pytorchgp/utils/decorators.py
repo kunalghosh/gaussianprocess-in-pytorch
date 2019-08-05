@@ -1,6 +1,7 @@
 import functools
 import torch
 
+
 def castargs_pytorch_to_numpy(func):
     @functools.wraps(func)
     def wrapper_func(*args, **kwargs):
